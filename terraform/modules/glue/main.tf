@@ -73,13 +73,20 @@ resource "aws_glue_job" "process_data" {
   }
 
   default_arguments = {
+    # Argumentos padrão do Glue
     "--TempDir"                            = "s3://${var.scripts_bucket_id}/temporary/"
     "--enable-metrics"                     = ""
     "--enable-continuous-cloudwatch-log"   = "true"
     "--job-bookmark-option"                = "job-bookmark-disable"
+    
+    # Otimizações de performance e resiliência
     "--spark-sql-adaptive-enabled"         = "true"
     "--spark-sql-adaptive-coalescePartitions-enabled" = "true"
     "--spark-sql-adaptive-skewJoin-enabled" = "true"
+
+    # Argumentos customizados para o script
+    "--input_path"                         = "${var.raw_bucket_arn}/input_data/"
+    "--output_path"                        = "${var.processed_bucket_arn}/output_data/"
   }
 
   tags = var.common_tags

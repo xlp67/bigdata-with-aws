@@ -63,7 +63,7 @@ resource "aws_route_table_association" "private" {
 
 resource "aws_security_group" "mwaa_sg" {
   name        = "${var.project_name}-mwaa-sg-${var.environment}"
-  description = "Permite todo o tráfego interno na VPC para o MWAA"
+  description = "Permite todo o trafego interno na VPC para o MWAA"
   vpc_id      = aws_vpc.mwaa_vpc.id
 
   ingress {
@@ -136,7 +136,7 @@ data "aws_iam_policy_document" "mwaa_policy" {
       "logs:GetLogEvents",
       "logs:GetLogRecord"
     ]
-    resources = ["arn:aws:logs:${var.aws_region}:*:log-group:airflow-${aws_mwaa_environment.mwaa.name}-*"]
+    resources = ["arn:aws:logs:${var.aws_region}:*:log-group:airflow-*-*"]
   }
   statement {
     effect  = "Allow"

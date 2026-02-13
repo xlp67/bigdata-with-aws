@@ -1,6 +1,6 @@
 # Projeto de Big Data com AWS Glue, MWAA e Terraform
 
-Este projeto implementa um pipeline de dados ponta-a-ponta na AWS, utilizando as melhores práticas de Infraestrutura como Código (IaC) e CI/CD.
+Este projeto implementa um pipeline de dados ponta-a-ponta na AWS, utilizando as melhores práticas de Infraestrutura como Código (IaC), automação e CI/CD.
 
 A arquitetura é composta por:
 - **Amazon S3:** Armazenamento de dados brutos (raw), processados (processed), scripts e DAGs.
@@ -13,16 +13,16 @@ A arquitetura é composta por:
 
 ## Arquitetura
 
-1.  **Ingestão:** Os dados de origem são depositados no bucket S3 `...-raw-...`.
+1.  **Ingestão:** Os dados de origem são depositados no bucket S3 de dados brutos, criado pelo Terraform.
 2.  **Orquestração:** Uma DAG no ambiente MWAA é acionada (diariamente, por padrão).
-3.  **Processamento:** A DAG aciona um Job no AWS Glue. O script PySpark lê os dados do bucket raw, aplica transformações e otimizações (como Adaptive Query Execution), e escreve o resultado em formato Parquet no bucket `...-processed-...`.
-4.  **Armazenamento:** Os dados processados e prontos para consumo ficam disponíveis no bucket `...-processed-...`.
+3.  **Processamento:** A DAG aciona um Job no AWS Glue. O Terraform configura o job para passar dinamicamente os caminhos de S3 (entrada e saída) como argumentos para o script. O script PySpark lê os dados, aplica transformações e escreve o resultado em formato Parquet no bucket de dados processados.
+4.  **Armazenamento:** Os dados processados e prontos para consumo ficam disponíveis no bucket S3 correspondente.
 
 ---
 
 ## Pré-requisitos (Configuração Manual)
 
-Antes de executar o pipeline do GitHub Actions pela primeira vez, os seguintes recursos devem ser criados manualmente na AWS. Eles são necessários para o `backend` do Terraform funcionar corretamente.
+Antes de executar o pipeline do GitHub Actions pela primeira vez, os seguintes recursos e configurações são necessários.
 
 1.  **Bucket S3 para o State do Terraform:**
     - Crie um bucket S3 para armazenar o arquivo de estado (`.tfstate`). Ex: `meu-projeto-terraform-state-12345`.
@@ -36,11 +36,12 @@ Antes de executar o pipeline do GitHub Actions pela primeira vez, os seguintes r
     - Modifique o arquivo `terraform/providers.tf` com os nomes do bucket e da tabela que você acabou de criar.
 
     ```hcl
+    // terraform/providers.tf
     backend "s3" {
-      bucket         = "NOME-DO-SEU-BUCKET-DE-STATE" // <-- Substitua aqui
+      bucket         = "NOME-DO-SEU-BUCKET-DE-STATE" 
       key            = "bigdata-aws/terraform.tfstate"
       region         = "us-east-1"
-      dynamodb_table = "NOME-DA-SUA-TABELA-DYNAMODB" // <-- Substitua aqui
+      dynamodb_table = "NOME-DA-SUA-TABELA-DYNAMODB" 
       encrypt        = true
     }
     ```
@@ -49,7 +50,7 @@ Antes de executar o pipeline do GitHub Actions pela primeira vez, os seguintes r
     - Configure um provedor OIDC no IAM da sua conta AWS para permitir a comunicação com o GitHub.
     - Crie uma IAM Role que o GitHub Actions possa assumir (`sts:AssumeRoleWithWebIdentity`).
     - Anexe a essa role as permissões necessárias para o Terraform criar os recursos (ex: `AdministratorAccess` para começar, ou permissões mais granulares para produção).
-    - Atualize o arquivo `.github/workflows/deploy.yml` com o ARN da role criada.
+    - **Crie um Secret no GitHub:** Vá em `Settings > Secrets and variables > Actions` no seu repositório e crie um novo secret chamado `AWS_OIDC_ROLE_ARN` com o ARN da role que você criou.
 
 ---
 
@@ -61,7 +62,6 @@ Antes de executar o pipeline do GitHub Actions pela primeira vez, os seguintes r
 ├── terraform/              # Código da Infraestrutura
 │   ├── modules/            # Módulos reutilizáveis (s3, glue, mwaa)
 │   ├── environments/       # Arquivos de variáveis por ambiente (dev/prod)
-│   ├── main.tf             # Orquestração principal dos módulos
 │   └── ...
 ├── src/
 │   ├── glue/jobs/          # Scripts PySpark para o AWS Glue
@@ -71,19 +71,14 @@ Antes de executar o pipeline do GitHub Actions pela primeira vez, os seguintes r
 
 ---
 
-## Pipeline de CI/CD
+## Pipeline de CI/CD (Aperfeiçoado)
 
-O pipeline é definido em `.github/workflows/deploy.yml` e funciona da seguinte maneira:
+O pipeline é definido em `.github/workflows/deploy.yml` e foi otimizado para ser mais robusto e dinâmico:
 
--   **Push na branch `developer`:**
-    1.  Configura as credenciais da AWS via OIDC.
-    2.  Executa `terraform init`, `plan` e `apply` utilizando o arquivo `environments/dev/terraform.tfvars`.
-    3.  Infraestrutura do ambiente de **desenvolvimento** é criada/atualizada.
-    4.  Scripts de `src/glue/jobs` e `src/dags` são sincronizados com os buckets S3 de `dev`.
-
--   **Push na branch `main`:**
-    1.  Configura as credenciais da AWS via OIDC.
-    2.  Executa `terraform init`, `plan` e `apply` utilizando o arquivo `environments/prod/terraform.tfvars`.
-    3.  Infraestrutura do ambiente de **produção** é criada/atualizada.
-    4.  Scripts de `src/glue/jobs` e `src/dags` são sincronizados com os buckets S3 de `prod`.
-# bigdata-with-aws
+-   **Gatilho:** Ocorre em `push` nas branches `developer` e `main`.
+-   **Lógica de Execução:**
+    1.  **Configura o Ambiente:** Determina o ambiente (`dev` ou `prod`) com base na branch.
+    2.  **Credenciais AWS:** Autentica-se na AWS de forma segura usando a Role OIDC configurada no secret `AWS_OIDC_ROLE_ARN`.
+    3.  **Terraform Apply:** Executa `terraform init`, `plan` e `apply` para criar ou atualizar a infraestrutura.
+    4.  **Extração de Outputs:** Após o `apply`, o pipeline executa `terraform output` para extrair dinamicamente os nomes dos buckets de scripts e DAGs que foram criados.
+    5.  **Sincronização Inteligente:** Usa os nomes de bucket extraídos no passo anterior para sincronizar os scripts PySpark e as DAGs do Airflow para os locais corretos no S3. Este método elimina a necessidade de nomes "hardcoded" e garante que o pipeline funcione mesmo que a nomenclatura dos recursos seja alterada no Terraform.

@@ -21,24 +21,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set environment variables for Terraform
+      - name: Set environment file based on branch
         run: |
           if [ "${{ github.ref_name }}" == "main" ]; then
             echo "Ambiente de Produção detectado."
             echo "TF_VAR_FILE=environments/prod/terraform.tfvars" >> $GITHUB_ENV
-            echo "S3_BUCKET_SCRIPTS=bigdata-scripts-prod" >> $GITHUB_ENV
-            echo "S3_BUCKET_DAGS=bigdata-dags-prod" >> $GITHUB_ENV
           elif [ "${{ github.ref_name }}" == "developer" ]; then
             echo "Ambiente de Desenvolvimento detectado."
             echo "TF_VAR_FILE=environments/dev/terraform.tfvars" >> $GITHUB_ENV
-            echo "S3_BUCKET_SCRIPTS=bigdata-scripts-dev" >> $GITHUB_ENV
-            echo "S3_BUCKET_DAGS=bigdata-dags-dev" >> $GITHUB_ENV
           fi
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::SEU_AWS_ACCOUNT_ID:role/github-actions-role
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }} # Ex: arn:aws:iam::123456789012:role/github-actions-role
           aws-region: us-east-1
 
       - name: Setup Terraform
@@ -48,22 +44,32 @@ jobs:
 
       - name: Terraform Init
         id: init
-        run: terraform -chdir=terraform init
+        working-directory: ./terraform
+        run: terraform init
         
       - name: Terraform Plan
         id: plan
-        run: terraform -chdir=terraform plan -var-file=${{ env.TF_VAR_FILE }} -no-color
+        working-directory: ./terraform
+        run: terraform plan -var-file=${{ env.TF_VAR_FILE }} -no-color
 
       - name: Terraform Apply
         id: apply
-        run: terraform -chdir=terraform apply -var-file=${{ env.TF_VAR_FILE }} -auto-approve
+        working-directory: ./terraform
+        run: terraform apply -var-file=${{ env.TF_VAR_FILE }} -auto-approve
+
+      - name: Get Terraform Outputs
+        id: tf-outputs
+        working-directory: ./terraform
+        run: |
+          echo "scripts_bucket_id=$(terraform output -raw scripts_bucket_id)" >> $GITHUB_OUTPUT
+          echo "dags_bucket_id=$(terraform output -raw dags_bucket_id)" >> $GITHUB_OUTPUT
 
       - name: Sync Glue Scripts to S3
         run: |
-          echo "Sincronizando scripts do Glue para s3://${{ env.S3_BUCKET_SCRIPTS }}/src/glue/jobs/"
-          aws s3 sync ./src/glue/jobs/ s3://${{ env.S3_BUCKET_SCRIPTS }}/src/glue/jobs/ --delete
+          echo "Sincronizando scripts do Glue para s3://${{ steps.tf-outputs.outputs.scripts_bucket_id }}/src/glue/jobs/"
+          aws s3 sync ./src/glue/jobs/ s3://${{ steps.tf-outputs.outputs.scripts_bucket_id }}/src/glue/jobs/ --delete
 
       - name: Sync DAGs to S3
         run: |
-          echo "Sincronizando DAGs do Airflow para s3://${{ env.S3_BUCKET_DAGS }}/src/dags/"
-          aws s3 sync ./src/dags/ s3://${{ env.S3_BUCKET_DAGS }}/src/dags/ --delete
+          echo "Sincronizando DAGs do Airflow para s3://${{ steps.tf-outputs.outputs.dags_bucket_id }}/src/dags/"
+          aws s3 sync ./src/dags/ s3://${{ steps.tf-outputs.outputs.dags_bucket_id }}/src/dags/ --delete
